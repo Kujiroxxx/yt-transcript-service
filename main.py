@@ -62,31 +62,24 @@ def vtt_to_text(vtt_content: str) -> str:
     return " ".join(cleaned).strip()
 
 def fetch_subtitles_with_ytdlp(url: str, lang: Optional[str]) -> tuple[str, Optional[str]]:
-    """
-    Возвращает (text, language_used) или кидает исключение.
-    """
     video_id = extract_video_id(url)
     workdir = "/tmp/yt"
     os.makedirs(workdir, exist_ok=True)
 
-    # шаблон имён файлов
     outtmpl = os.path.join(workdir, f"{video_id}.%(ext)s")
-
-    # выбираем языки: если указан lang, пробуем его; иначе пробуем набор наиболее вероятных
-    # можно расширить список под себя
     lang_list = [lang] if lang else ["ru", "en", "de", "uk"]
 
     last_err = None
 
     for l in lang_list:
-        # Сначала пробуем обычные субтитры (--write-subs), потом авто (--write-auto-subs)
         for auto in [False, True]:
-            # чистим старые файлы для этого video_id
+
             for f in glob.glob(os.path.join(workdir, f"{video_id}*")):
                 try:
                     os.remove(f)
                 except:
                     pass
+
             cookies_path = os.getenv("YT_COOKIES_PATH", "/etc/secrets/cookies.txt")
             use_cookies = Path(cookies_path).exists()
 
@@ -112,18 +105,18 @@ def fetch_subtitles_with_ytdlp(url: str, lang: Optional[str]) -> tuple[str, Opti
                     text=True,
                     timeout=60
                 )
+
                 if proc.returncode != 0:
                     last_err = (proc.stderr or proc.stdout or "").strip()
                     continue
 
-                # yt-dlp обычно создаёт файл вида: <id>.<lang>.vtt или <id>.<lang>-orig.vtt и т.п.
                 candidates = glob.glob(os.path.join(workdir, f"{video_id}*.vtt"))
                 if not candidates:
                     last_err = "yt-dlp finished but .vtt not found"
                     continue
 
-                # берём самый свежий/короткий путь
                 path = sorted(candidates, key=lambda p: os.path.getmtime(p), reverse=True)[0]
+
                 with open(path, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
 
