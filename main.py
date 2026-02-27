@@ -177,13 +177,12 @@ def get_transcript(
 
 @app.get("/health")
 def health():
-    cookies_env = bool(os.getenv("YT_COOKIES"))
+    cookies_env_set = bool(os.getenv("YT_COOKIES"))
     cookies_path_env = os.getenv("YT_COOKIES_PATH", "")
     p = Path(cookies_path_env) if cookies_path_env else None
-    file_exists = p.exists() if p else False
     return {
         "status": "ok",
-        "cookies_env_set": cookies_env,
+        "cookies_env_set": cookies_env_set,
         "cookies_path_env": cookies_path_env,
-        "cookies_file_exists": file_exists,
+        "cookies_file_exists": p.exists() if p else False,
     }
