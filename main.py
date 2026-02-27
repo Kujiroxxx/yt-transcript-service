@@ -87,7 +87,6 @@ def fetch_subtitles_with_ytdlp(url: str, lang: Optional[str]) -> tuple[str, Opti
                     os.remove(f)
                 except:
                     pass
-
                        cookies_path = os.getenv("YT_COOKIES_PATH", "/etc/secrets/cookies.txt")
             use_cookies = Path(cookies_path).exists()
 
