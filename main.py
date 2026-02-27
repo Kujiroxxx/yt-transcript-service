@@ -81,15 +81,16 @@ def fetch_subtitles_with_ytdlp(url: str, lang: Optional[str]) -> tuple[str, Opti
                 except:
                     pass
 
-            cookies_path = os.getenv("YT_COOKIES_PATH", "/etc/secrets/cookies.txt")
-            use_cookies = Path(cookies_path).exists()
+            cookies_env = os.getenv("YT_COOKIES")
+            use_cookies = cookies_env is not None
 
             args = ["yt-dlp"]
 
             if use_cookies:
                 tmp_cookies_path = os.path.join(workdir, "cookies.txt")
-                shutil.copyfile(cookies_path, tmp_cookies_path)
-                args += ["--cookies", tmp_cookies_path]
+                with open(tmp_cookies_path, "w", encoding="utf-8") as f:
+                    f.write(cookies_env)
+            args += ["--cookies", tmp_cookies_path]
 
             args += [
                 "--skip-download",
