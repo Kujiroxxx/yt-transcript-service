@@ -5,6 +5,7 @@ import re
 import os
 import glob
 import subprocess
+from pathlib import Path
 
 app = FastAPI(title="YT Transcript Service", version="2.0.0")
 
@@ -87,8 +88,12 @@ def fetch_subtitles_with_ytdlp(url: str, lang: Optional[str]) -> tuple[str, Opti
                 except:
                     pass
 
+           cookies_path = os.getenv("YT_COOKIES_PATH", "/etc/secrets/cookies.txt")
+           use_cookies = Path(cookies_path).exists()
+            
             args = [
                 "yt-dlp",
+                "--cookies", cookies_path,
                 "--skip-download",
                 "--no-warnings",
                 "--write-subs" if not auto else "--write-auto-subs",
