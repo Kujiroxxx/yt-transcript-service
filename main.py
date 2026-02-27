@@ -81,17 +81,28 @@ def fetch_subtitles_with_ytdlp(url: str, lang: Optional[str]) -> tuple[str, Opti
                 except:
                     pass
 
-            cookies_env = os.getenv("YT_COOKIES")
-            use_cookies = cookies_env is not None
+                        # --- cookies handling: prefer env var, fallback to secret file ---
+            # workdir уже определён как /tmp/yt
+            cookies_env = os.getenv("YT_COOKIES")  # весь текст cookies, если задан
+            cookies_path_env = os.getenv("YT_COOKIES_PATH")  # путь к secret file, если есть
+            tmp_cookies_path = os.path.join(workdir, "cookies.txt")
+            use_cookies = False
 
-            args = ["yt-dlp"]
-
-            if use_cookies:
-                tmp_cookies_path = os.path.join(workdir, "cookies.txt")
+            if cookies_env:
+                # создаём временный файл в /tmp/yt из переменной окружения
                 with open(tmp_cookies_path, "w", encoding="utf-8") as f:
                     f.write(cookies_env)
-            args += ["--cookies", tmp_cookies_path]
+                use_cookies = True
+            elif cookies_path_env and Path(cookies_path_env).exists():
+                # если задан путь (Render style), копируем файл в /tmp/yt
+                shutil.copyfile(cookies_path_env, tmp_cookies_path)
+                use_cookies = True
+            # иначе не используем cookies
 
+            args = ["yt-dlp"]
+            if use_cookies:
+                args += ["--cookies", tmp_cookies_path]
+            # --- end cookies handling ---
             args += [
                 "--skip-download",
                 "--no-warnings",
@@ -166,12 +177,13 @@ def get_transcript(
 
 @app.get("/health")
 def health():
-    cookies_path = os.getenv("YT_COOKIES_PATH", "/etc/secrets/cookies.txt")
-    p = Path(cookies_path)
+    cookies_env = bool(os.getenv("YT_COOKIES"))
+    cookies_path_env = os.getenv("YT_COOKIES_PATH", "")
+    p = Path(cookies_path_env) if cookies_path_env else None
+    file_exists = p.exists() if p else False
     return {
         "status": "ok",
-        "cookies_path": cookies_path,
-        "cookies_exists": p.exists(),
-        "cookies_size": p.stat().st_size if p.exists() else 0,
-        "cookies_readable": os.access(cookies_path, os.R_OK) if p.exists() else False,
+        "cookies_env_set": cookies_env,
+        "cookies_path_env": cookies_path_env,
+        "cookies_file_exists": file_exists,
     }
