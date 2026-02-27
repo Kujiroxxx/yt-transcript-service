@@ -2,10 +2,11 @@ from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 import re
+import os
+import glob
+import subprocess
 
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-
-app = FastAPI(title="YT Transcript Service", version="1.0.0")
+app = FastAPI(title="YT Transcript Service", version="2.0.0")
 
 class Segment(BaseModel):
     start: float
@@ -30,6 +31,111 @@ def extract_video_id(url: str) -> str:
             return m.group(1)
     raise ValueError("Cannot extract video_id from url")
 
+def vtt_to_text(vtt_content: str) -> str:
+    lines = vtt_content.splitlines()
+    out = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # пропускаем заголовки и таймкоды
+        if line.startswith("WEBVTT"):
+            continue
+        if "-->" in line:
+            continue
+        # пропускаем служебные теги/комментарии
+        if line.startswith("NOTE") or line.startswith("STYLE") or line.startswith("REGION"):
+            continue
+        # убираем простые html-теги
+        line = re.sub(r"<[^>]+>", "", line).strip()
+        if not line:
+            continue
+        out.append(line)
+    # убираем повторы соседних строк (иногда vtt дублирует)
+    cleaned = []
+    prev = None
+    for t in out:
+        if t != prev:
+            cleaned.append(t)
+        prev = t
+    return " ".join(cleaned).strip()
+
+def fetch_subtitles_with_ytdlp(url: str, lang: Optional[str]) -> tuple[str, Optional[str]]:
+    """
+    Возвращает (text, language_used) или кидает исключение.
+    """
+    video_id = extract_video_id(url)
+    workdir = "/tmp/yt"
+    os.makedirs(workdir, exist_ok=True)
+
+    # шаблон имён файлов
+    outtmpl = os.path.join(workdir, f"{video_id}.%(ext)s")
+
+    # выбираем языки: если указан lang, пробуем его; иначе пробуем набор наиболее вероятных
+    # можно расширить список под себя
+    lang_list = [lang] if lang else ["ru", "en", "de", "uk"]
+
+    last_err = None
+
+    for l in lang_list:
+        # Сначала пробуем обычные субтитры (--write-subs), потом авто (--write-auto-subs)
+        for auto in [False, True]:
+            # чистим старые файлы для этого video_id
+            for f in glob.glob(os.path.join(workdir, f"{video_id}*")):
+                try:
+                    os.remove(f)
+                except:
+                    pass
+
+            args = [
+                "yt-dlp",
+                "--skip-download",
+                "--no-warnings",
+                "--write-subs" if not auto else "--write-auto-subs",
+                "--sub-langs", l,
+                "--sub-format", "vtt",
+                "--output", outtmpl,
+                url,
+            ]
+
+            try:
+                proc = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                if proc.returncode != 0:
+                    last_err = (proc.stderr or proc.stdout or "").strip()
+                    continue
+
+                # yt-dlp обычно создаёт файл вида: <id>.<lang>.vtt или <id>.<lang>-orig.vtt и т.п.
+                candidates = glob.glob(os.path.join(workdir, f"{video_id}*.vtt"))
+                if not candidates:
+                    last_err = "yt-dlp finished but .vtt not found"
+                    continue
+
+                # берём самый свежий/короткий путь
+                path = sorted(candidates, key=lambda p: os.path.getmtime(p), reverse=True)[0]
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+
+                text = vtt_to_text(content)
+                if not text:
+                    last_err = "Subtitles file exists but parsed text is empty"
+                    continue
+
+                return text, l
+
+            except subprocess.TimeoutExpired:
+                last_err = "yt-dlp timeout"
+                continue
+            except Exception as e:
+                last_err = f"yt-dlp error: {e}"
+                continue
+
+    raise RuntimeError(last_err or "Unable to fetch subtitles via yt-dlp")
+
 @app.get("/transcript", response_model=TranscriptResponse)
 def get_transcript(
     url: str = Query(..., description="YouTube URL"),
@@ -40,25 +146,16 @@ def get_transcript(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # 1) Основной путь: yt-dlp (устойчивее к 429)
     try:
-        if lang:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[lang])
-            language = lang
-        else:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id)
-            language = None
-
-        segments = [Segment(start=s["start"], duration=s["duration"], text=s["text"]) for s in transcript]
-        full_text = " ".join([s.text.strip() for s in segments]).strip()
-
-        return TranscriptResponse(
-            video_id=video_id,
-            language=language,
-            text=full_text,
-            segments=segments
-        )
-
-    except (TranscriptsDisabled, NoTranscriptFound):
-        raise HTTPException(status_code=404, detail="Transcript not available (disabled, missing, or restricted).")
+        text, used_lang = fetch_subtitles_with_ytdlp(url, lang)
+        # У нас нет точной сегментации по таймкодам на этом уровне — вернём один сегмент
+        segments = [Segment(start=0.0, duration=0.0, text=text)]
+        return TranscriptResponse(video_id=video_id, language=used_lang, text=text, segments=segments)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+        # 2) Если совсем не получилось — говорим честно, чтобы GPT попросил транскрипт у пользователя
+        # 429 у YouTube часто всплывает тут тоже (реже, но бывает)
+        msg = str(e)
+        if "429" in msg or "Too Many Requests" in msg:
+            raise HTTPException(status_code=429, detail="YouTube rate limited requests (429). Try again later.")
+        raise HTTPException(status_code=404, detail=f"Transcript not available via yt-dlp. Details: {msg}")
