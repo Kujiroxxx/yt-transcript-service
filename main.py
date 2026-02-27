@@ -106,6 +106,11 @@ def fetch_subtitles_with_ytdlp(url: str, lang: Optional[str]) -> tuple[str, Opti
             args += [
                 "--skip-download",
                 "--no-warnings",
+                "--no-playlist",
+                "--ignore-errors",
+                "--extractor-retries", "3",
+                "--fragment-retries", "3",
+                "-f", "bestaudio/best",
                 "--write-subs" if not auto else "--write-auto-subs",
                 "--sub-langs", l,
                 "--sub-format", "vtt",
