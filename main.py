@@ -191,3 +191,48 @@ def health():
         "cookies_path_env": cookies_path_env,
         "cookies_file_exists": p.exists() if p else False,
     }
+
+
+@app.get("/debug")
+def debug(url: str = Query(..., description="YouTube URL")):
+    workdir = "/tmp/yt"
+    os.makedirs(workdir, exist_ok=True)
+
+    cookies_env = os.getenv("YT_COOKIES")
+    tmp_cookies_path = os.path.join(workdir, "cookies.txt")
+
+    cookies_written = False
+    cookies_size = 0
+
+    if cookies_env:
+        with open(tmp_cookies_path, "w", encoding="utf-8") as f:
+            f.write(cookies_env)
+        cookies_written = True
+        cookies_size = os.path.getsize(tmp_cookies_path)
+
+    args = ["yt-dlp"]
+    if cookies_written:
+        args += ["--cookies", tmp_cookies_path]
+
+    # максимально безопасная команда: только список субтитров
+    args += [
+        "--skip-download",
+        "--no-warnings",
+        "--no-playlist",
+        "--list-subs",
+        url,
+    ]
+
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=60)
+        return {
+            "cookies_env_set": bool(cookies_env),
+            "cookies_tmp_path": tmp_cookies_path,
+            "cookies_written": cookies_written,
+            "cookies_size": cookies_size,
+            "returncode": proc.returncode,
+            "stdout": (proc.stdout or "")[-3000:],  # обрезаем
+            "stderr": (proc.stderr or "")[-3000:],
+        }
+    except Exception as e:
+        return {"error": str(e), "cookies_env_set": bool(cookies_env), "cookies_written": cookies_written, "cookies_size": cookies_size}
