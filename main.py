@@ -164,3 +164,15 @@ def get_transcript(
         if "429" in msg or "Too Many Requests" in msg:
             raise HTTPException(status_code=429, detail="YouTube rate limited requests (429). Try again later.")
         raise HTTPException(status_code=404, detail=f"Transcript not available via yt-dlp. Details: {msg}")
+
+@app.get("/health")
+def health():
+    cookies_path = os.getenv("YT_COOKIES_PATH", "/etc/secrets/cookies.txt")
+    p = Path(cookies_path)
+    return {
+        "status": "ok",
+        "cookies_path": cookies_path,
+        "cookies_exists": p.exists(),
+        "cookies_size": p.stat().st_size if p.exists() else 0,
+        "cookies_readable": os.access(cookies_path, os.R_OK) if p.exists() else False,
+    }
